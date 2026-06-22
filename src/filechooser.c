@@ -45,6 +45,13 @@ on_nemo_open_file_cb (GObject *source_object,
         g_auto(GStrv) uris = NULL;
         g_variant_get (reply, "(^as)", &uris);
 
+        g_debug ("on_nemo_open_file_cb: received %d URIs from Nemo", uris ? (gint)g_strv_length (uris) : 0);
+        if (uris) {
+            for (gint i = 0; uris[i] != NULL; i++) {
+                g_debug ("on_nemo_open_file_cb: URI[%d]: %s", i, uris[i]);
+            }
+        }
+
         if (uris && g_strv_length (uris) > 0) {
             response = 0; // Success
             g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv ((const gchar * const *)uris, -1));
@@ -56,6 +63,8 @@ on_nemo_open_file_cb (GObject *source_object,
     if (handle->request->exported) {
         request_unexport (handle->request);
     }
+
+    g_debug ("on_nemo_open_file_cb: completing OpenFile with response %u", response);
 
     xdp_impl_file_chooser_complete_open_file (handle->impl,
                                              handle->invocation,
@@ -95,6 +104,8 @@ handle_open_file (XdpImplFileChooser *object,
     g_variant_lookup (arg_options, "multiple", "b", &multiple);
     gboolean directory = FALSE;
     g_variant_lookup (arg_options, "directory", "b", &directory);
+
+    g_debug ("handle_open_file: multiple=%d, directory=%d", multiple, directory);
 
     g_autofree gchar *current_folder_uri = NULL;
     const gchar *current_folder_path = NULL;
