@@ -51,6 +51,7 @@
 #include "screenshot.h"
 #include "settings.h"
 #include "wallpaper.h"
+#include "filechooser.h"
 
 static GMainLoop *loop = NULL;
 static GHashTable *outstanding_handles = NULL;
@@ -144,6 +145,12 @@ on_bus_acquired (GDBusConnection *connection,
     }
 
   if (!background_init (connection, &error))
+    {
+      g_warning ("error: %s\n", error->message);
+      g_clear_error (&error);
+    }
+
+  if (!filechooser_init (connection, &error))
     {
       g_warning ("error: %s\n", error->message);
       g_clear_error (&error);
