@@ -10,67 +10,171 @@
 #include "request.h"
 #include "utils.h"
 
+typedef enum {
+    FILE_CHOOSER_ACTION_OPEN,
+    FILE_CHOOSER_ACTION_SAVE,
+    FILE_CHOOSER_ACTION_SAVE_FILES
+} FileChooserActionType;
+
 typedef struct {
     XdpImplFileChooser *impl;
     GDBusMethodInvocation *invocation;
     Request *request;
+    FileChooserActionType action_type;
+    GVariant *options;
+    GtkWidget *dialog;
 } FileChooserHandle;
+
+static void on_dialog_response (GtkDialog *dialog, gint response_id, gpointer user_data);
+static gboolean handle_close (XdpImplRequest *object, GDBusMethodInvocation *invocation, gpointer user_data);
 
 static void
 file_chooser_handle_free (FileChooserHandle *handle)
 {
     g_clear_object (&handle->request);
+    if (handle->options)
+        g_variant_unref (handle->options);
     g_free (handle);
 }
 
-static void
-on_nemo_open_file_cb (GObject *source_object,
-                      GAsyncResult *res,
-                      gpointer user_data)
+static gboolean
+handle_close (XdpImplRequest *object,
+              GDBusMethodInvocation *invocation,
+              gpointer user_data)
 {
     FileChooserHandle *handle = user_data;
-    g_autoptr(GVariant) reply = NULL;
-    g_autoptr(GError) error = NULL;
+    g_debug ("FileChooser request closed by client (handle-close)");
+
+    if (handle->dialog) {
+        g_signal_handlers_disconnect_by_func (handle->dialog, G_CALLBACK (on_dialog_response), handle);
+        gtk_widget_destroy (handle->dialog);
+        handle->dialog = NULL;
+    }
+
+    g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+    
+    if (handle->action_type == FILE_CHOOSER_ACTION_OPEN) {
+        xdp_impl_file_chooser_complete_open_file (handle->impl, handle->invocation, 1, g_variant_builder_end (results_builder));
+    } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE) {
+        xdp_impl_file_chooser_complete_save_file (handle->impl, handle->invocation, 1, g_variant_builder_end (results_builder));
+    } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE_FILES) {
+        xdp_impl_file_chooser_complete_save_files (handle->impl, handle->invocation, 1, g_variant_builder_end (results_builder));
+    }
+
+    file_chooser_handle_free (handle);
+    return FALSE;
+}
+
+static void
+on_dialog_response (GtkDialog *dialog,
+                    gint response_id,
+                    gpointer user_data)
+{
+    FileChooserHandle *handle = user_data;
     guint response = 2; // Default to error
     g_autoptr(GVariantBuilder) results_builder = NULL;
 
     results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+    g_debug ("on_dialog_response: response_id=%d", response_id);
 
-    reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source_object), res, &error);
+    g_signal_handlers_disconnect_by_func (handle->request, G_CALLBACK (handle_close), handle);
 
-    if (error) {
-        g_warning ("Failed to call Nemo OpenFile: %s", error->message);
-        response = 2;
-    } else {
-        g_auto(GStrv) uris = NULL;
-        g_variant_get (reply, "(^as)", &uris);
-
-        g_debug ("on_nemo_open_file_cb: received %d URIs from Nemo", uris ? (gint)g_strv_length (uris) : 0);
-        if (uris) {
-            for (gint i = 0; uris[i] != NULL; i++) {
-                g_debug ("on_nemo_open_file_cb: URI[%d]: %s", i, uris[i]);
+    if (response_id == GTK_RESPONSE_ACCEPT) {
+        if (handle->action_type == FILE_CHOOSER_ACTION_OPEN) {
+            GSList *filenames = gtk_file_chooser_get_filenames (GTK_FILE_CHOOSER (dialog));
+            if (filenames) {
+                response = 0; // Success
+                g_autoptr(GVariantBuilder) uris_builder = g_variant_builder_new (G_VARIANT_TYPE ("as"));
+                for (GSList *l = filenames; l != NULL; l = l->next) {
+                    gchar *filename = l->data;
+                    gchar *uri = g_filename_to_uri (filename, NULL, NULL);
+                    if (uri) {
+                        g_variant_builder_add (uris_builder, "s", uri);
+                        g_free (uri);
+                    }
+                    g_free (filename);
+                }
+                g_slist_free (filenames);
+                g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_builder_end (uris_builder));
+            } else {
+                response = 1; // Cancelled
+            }
+        } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE) {
+            gchar *filename = gtk_file_chooser_get_filename (GTK_FILE_CHOOSER (dialog));
+            if (filename) {
+                response = 0; // Success
+                gchar *uri = g_filename_to_uri (filename, NULL, NULL);
+                if (uri) {
+                    const gchar *uris[2] = { uri, NULL };
+                    g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv (uris, -1));
+                    g_free (uri);
+                }
+                g_free (filename);
+            } else {
+                response = 1; // Cancelled
+            }
+        } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE_FILES) {
+            GSList *filenames_selected = gtk_file_chooser_get_filenames (GTK_FILE_CHOOSER (dialog));
+            if (filenames_selected) {
+                response = 0; // Success
+                g_autoptr(GVariantBuilder) uris_builder = g_variant_builder_new (G_VARIANT_TYPE ("as"));
+                gchar *selected_dir = filenames_selected->data;
+                
+                g_auto(GStrv) suggested_filenames = NULL;
+                if (g_variant_lookup (handle->options, "filenames", "^as", &suggested_filenames)) {
+                    for (gint i = 0; suggested_filenames[i] != NULL; i++) {
+                        gchar *full_path = g_build_filename (selected_dir, suggested_filenames[i], NULL);
+                        gchar *uri = g_filename_to_uri (full_path, NULL, NULL);
+                        if (uri) {
+                            g_variant_builder_add (uris_builder, "s", uri);
+                            g_free (uri);
+                        }
+                        g_free (full_path);
+                    }
+                } else {
+                    gchar *uri = g_filename_to_uri (selected_dir, NULL, NULL);
+                    if (uri) {
+                        g_variant_builder_add (uris_builder, "s", uri);
+                        g_free (uri);
+                    }
+                }
+                
+                g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_builder_end (uris_builder));
+                g_slist_free_full (filenames_selected, g_free);
+            } else {
+                response = 1; // Cancelled
             }
         }
-
-        if (uris && g_strv_length (uris) > 0) {
-            response = 0; // Success
-            g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv ((const gchar * const *)uris, -1));
-        } else {
-            response = 1; // Cancelled
-        }
+    } else if (response_id == GTK_RESPONSE_CANCEL || response_id == GTK_RESPONSE_DELETE_EVENT) {
+        response = 1; // Cancelled
+    } else {
+        response = 2; // Error
     }
 
     if (handle->request->exported) {
         request_unexport (handle->request);
     }
 
-    g_debug ("on_nemo_open_file_cb: completing OpenFile with response %u", response);
+    g_debug ("on_dialog_response: completing call with response %u", response);
 
-    xdp_impl_file_chooser_complete_open_file (handle->impl,
-                                             handle->invocation,
-                                             response,
-                                             g_variant_builder_end (results_builder));
+    if (handle->action_type == FILE_CHOOSER_ACTION_OPEN) {
+        xdp_impl_file_chooser_complete_open_file (handle->impl,
+                                                 handle->invocation,
+                                                 response,
+                                                 g_variant_builder_end (results_builder));
+    } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE) {
+        xdp_impl_file_chooser_complete_save_file (handle->impl,
+                                                 handle->invocation,
+                                                 response,
+                                                 g_variant_builder_end (results_builder));
+    } else if (handle->action_type == FILE_CHOOSER_ACTION_SAVE_FILES) {
+        xdp_impl_file_chooser_complete_save_files (handle->impl,
+                                                  handle->invocation,
+                                                  response,
+                                                  g_variant_builder_end (results_builder));
+    }
 
+    gtk_widget_destroy (GTK_WIDGET (dialog));
     file_chooser_handle_free (handle);
 }
 
@@ -88,18 +192,19 @@ handle_open_file (XdpImplFileChooser *object,
     g_autoptr(Request) request = NULL;
     const char *sender;
 
-    g_debug ("Got new FileChooser OpenFile request");
+    g_debug ("handle_open_file: started");
+
+    if (!gtk_init_check (NULL, NULL)) {
+        g_warning ("GTK is not initialized or display is not available");
+        g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+        xdp_impl_file_chooser_complete_open_file (object, invocation, 2, g_variant_builder_end (results_builder));
+        return TRUE;
+    }
 
     sender = g_dbus_method_invocation_get_sender (invocation);
     connection = g_dbus_method_invocation_get_connection (invocation);
     request = request_new (sender, arg_app_id, arg_handle);
 
-    handle = g_new0 (FileChooserHandle, 1);
-    handle->impl = object;
-    handle->invocation = invocation;
-    handle->request = g_object_ref (request);
-
-    // Unpack options
     gboolean multiple = FALSE;
     g_variant_lookup (arg_options, "multiple", "b", &multiple);
     gboolean directory = FALSE;
@@ -107,80 +212,65 @@ handle_open_file (XdpImplFileChooser *object,
 
     g_debug ("handle_open_file: multiple=%d, directory=%d", multiple, directory);
 
-    g_autofree gchar *current_folder_uri = NULL;
+    GtkWidget *dialog = gtk_file_chooser_dialog_new (arg_title ? arg_title : (directory ? _("Select Folder") : _("Open File")),
+                                                     NULL,
+                                                     directory ? GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER : GTK_FILE_CHOOSER_ACTION_OPEN,
+                                                     _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                                     _("_Open"), GTK_RESPONSE_ACCEPT,
+                                                     NULL);
+
+    gtk_file_chooser_set_select_multiple (GTK_FILE_CHOOSER (dialog), multiple);
+
     const gchar *current_folder_path = NULL;
     if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
-        g_autoptr(GFile) f = g_file_new_for_path (current_folder_path);
-        current_folder_uri = g_file_get_uri (f);
+        gtk_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), current_folder_path);
     }
 
-    // Call Nemo D-Bus asynchronously
-    g_autoptr(GVariantBuilder) filters_builder = g_variant_builder_new (G_VARIANT_TYPE ("as"));
-    // Add empty filters for now
-    
-    g_dbus_connection_call (connection,
-                            "org.Nemo.FileChooser",
-                            "/org/Nemo/FileChooser",
-                            "org.Nemo.FileChooser",
-                            "OpenFile",
-                            g_variant_new ("(sasbbs)",
-                                           arg_title ? arg_title : "",
-                                           filters_builder,
-                                           multiple,
-                                           directory,
-                                           current_folder_uri ? current_folder_uri : ""),
-                            G_VARIANT_TYPE ("(as)"),
-                            G_DBUS_CALL_FLAGS_NONE,
-                            -1,
-                            NULL,
-                            on_nemo_open_file_cb,
-                            handle);
+    const gchar *current_file_path = NULL;
+    if (g_variant_lookup (arg_options, "current_file", "^ay", &current_file_path)) {
+        gtk_file_chooser_set_filename (GTK_FILE_CHOOSER (dialog), current_file_path);
+    }
+
+    GVariantIter *filters_iter = NULL;
+    if (g_variant_lookup (arg_options, "filters", "a(sa(us))", &filters_iter)) {
+        GVariantIter *filter_iter;
+        const gchar *filter_name;
+        while (g_variant_iter_loop (filters_iter, "(&sa(us))", &filter_name, &filter_iter)) {
+            GtkFileFilter *filter = gtk_file_filter_new ();
+            if (filter_name && *filter_name) {
+                gtk_file_filter_set_name (filter, filter_name);
+            }
+            guint32 type;
+            const gchar *pattern;
+            while (g_variant_iter_loop (filter_iter, "(u&s)", &type, &pattern)) {
+                if (type == 0) {
+                    gtk_file_filter_add_pattern (filter, pattern);
+                } else if (type == 1) {
+                    gtk_file_filter_add_mime_type (filter, pattern);
+                }
+            }
+            gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (dialog), filter);
+        }
+        g_variant_iter_free (filters_iter);
+    }
+
+    handle = g_new0 (FileChooserHandle, 1);
+    handle->impl = object;
+    handle->invocation = invocation;
+    handle->request = g_object_ref (request);
+    handle->action_type = FILE_CHOOSER_ACTION_OPEN;
+    handle->options = g_variant_ref (arg_options);
+    handle->dialog = dialog;
+
+    g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
+    g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
 
     request_export (request, connection);
+
+    gtk_widget_show_all (dialog);
+    gtk_window_present (GTK_WINDOW (dialog));
+
     return TRUE;
-}
-
-static void
-on_nemo_save_file_cb (GObject *source_object,
-                      GAsyncResult *res,
-                      gpointer user_data)
-{
-    FileChooserHandle *handle = user_data;
-    g_autoptr(GVariant) reply = NULL;
-    g_autoptr(GError) error = NULL;
-    guint response = 2; // Default to error
-    g_autoptr(GVariantBuilder) results_builder = NULL;
-
-    results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
-
-    reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source_object), res, &error);
-
-    if (error) {
-        g_warning ("Failed to call Nemo SaveFile: %s", error->message);
-        response = 2;
-    } else {
-        const gchar *result_uri = NULL;
-        g_variant_get (reply, "(&s)", &result_uri);
-
-        if (result_uri && *result_uri) {
-            response = 0; // Success
-            const gchar *uris[2] = { result_uri, NULL };
-            g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv (uris, -1));
-        } else {
-            response = 1; // Cancelled
-        }
-    }
-
-    if (handle->request->exported) {
-        request_unexport (handle->request);
-    }
-
-    xdp_impl_file_chooser_complete_save_file (handle->impl,
-                                             handle->invocation,
-                                             response,
-                                             g_variant_builder_end (results_builder));
-
-    file_chooser_handle_free (handle);
 }
 
 static gboolean
@@ -197,45 +287,82 @@ handle_save_file (XdpImplFileChooser *object,
     g_autoptr(Request) request = NULL;
     const char *sender;
 
-    g_debug ("Got new FileChooser SaveFile request");
+    g_debug ("handle_save_file: started");
+
+    if (!gtk_init_check (NULL, NULL)) {
+        g_warning ("GTK is not initialized or display is not available");
+        g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+        xdp_impl_file_chooser_complete_save_file (object, invocation, 2, g_variant_builder_end (results_builder));
+        return TRUE;
+    }
 
     sender = g_dbus_method_invocation_get_sender (invocation);
     connection = g_dbus_method_invocation_get_connection (invocation);
     request = request_new (sender, arg_app_id, arg_handle);
 
+    GtkWidget *dialog = gtk_file_chooser_dialog_new (arg_title ? arg_title : _("Save File"),
+                                                     NULL,
+                                                     GTK_FILE_CHOOSER_ACTION_SAVE,
+                                                     _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                                     _("_Save"), GTK_RESPONSE_ACCEPT,
+                                                     NULL);
+
+    gtk_file_chooser_set_do_overwrite_confirmation (GTK_FILE_CHOOSER (dialog), TRUE);
+
+    const gchar *current_folder_path = NULL;
+    if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
+        gtk_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), current_folder_path);
+    }
+
+    const gchar *current_name = NULL;
+    if (g_variant_lookup (arg_options, "current_name", "&s", &current_name)) {
+        gtk_file_chooser_set_current_name (GTK_FILE_CHOOSER (dialog), current_name);
+    }
+
+    const gchar *current_file_path = NULL;
+    if (g_variant_lookup (arg_options, "current_file", "^ay", &current_file_path)) {
+        gtk_file_chooser_set_filename (GTK_FILE_CHOOSER (dialog), current_file_path);
+    }
+
+    GVariantIter *filters_iter = NULL;
+    if (g_variant_lookup (arg_options, "filters", "a(sa(us))", &filters_iter)) {
+        GVariantIter *filter_iter;
+        const gchar *filter_name;
+        while (g_variant_iter_loop (filters_iter, "(&sa(us))", &filter_name, &filter_iter)) {
+            GtkFileFilter *filter = gtk_file_filter_new ();
+            if (filter_name && *filter_name) {
+                gtk_file_filter_set_name (filter, filter_name);
+            }
+            guint32 type;
+            const gchar *pattern;
+            while (g_variant_iter_loop (filter_iter, "(u&s)", &type, &pattern)) {
+                if (type == 0) {
+                    gtk_file_filter_add_pattern (filter, pattern);
+                } else if (type == 1) {
+                    gtk_file_filter_add_mime_type (filter, pattern);
+                }
+            }
+            gtk_file_chooser_add_filter (GTK_FILE_CHOOSER (dialog), filter);
+        }
+        g_variant_iter_free (filters_iter);
+    }
+
     handle = g_new0 (FileChooserHandle, 1);
     handle->impl = object;
     handle->invocation = invocation;
     handle->request = g_object_ref (request);
+    handle->action_type = FILE_CHOOSER_ACTION_SAVE;
+    handle->options = g_variant_ref (arg_options);
+    handle->dialog = dialog;
 
-    // Unpack options
-    g_autofree gchar *current_folder_uri = NULL;
-    const gchar *current_folder_path = NULL;
-    if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
-        g_autoptr(GFile) f = g_file_new_for_path (current_folder_path);
-        current_folder_uri = g_file_get_uri (f);
-    }
-
-    const gchar *suggested_name = NULL;
-    g_variant_lookup (arg_options, "current_name", "&s", &suggested_name);
-
-    g_dbus_connection_call (connection,
-                            "org.Nemo.FileChooser",
-                            "/org/Nemo/FileChooser",
-                            "org.Nemo.FileChooser",
-                            "SaveFile",
-                            g_variant_new ("(sss)",
-                                           arg_title ? arg_title : "",
-                                           current_folder_uri ? current_folder_uri : "",
-                                           suggested_name ? suggested_name : ""),
-                            G_VARIANT_TYPE ("(s)"),
-                            G_DBUS_CALL_FLAGS_NONE,
-                            -1,
-                            NULL,
-                            on_nemo_save_file_cb,
-                            handle);
+    g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
+    g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
 
     request_export (request, connection);
+
+    gtk_widget_show_all (dialog);
+    gtk_window_present (GTK_WINDOW (dialog));
+
     return TRUE;
 }
 
@@ -248,10 +375,52 @@ handle_save_files (XdpImplFileChooser *object,
                    const char *arg_title,
                    GVariant *arg_options)
 {
-    // SaveFiles is very similar to OpenFile in this proxy context.
-    // For baseline, complete it with cancellation since it's rarely used.
-    g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
-    xdp_impl_file_chooser_complete_save_files (object, invocation, 1, g_variant_builder_end (results_builder));
+    GDBusConnection *connection;
+    FileChooserHandle *handle;
+    g_autoptr(Request) request = NULL;
+    const char *sender;
+
+    g_debug ("handle_save_files: started");
+
+    if (!gtk_init_check (NULL, NULL)) {
+        g_warning ("GTK is not initialized or display is not available");
+        g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+        xdp_impl_file_chooser_complete_save_files (object, invocation, 2, g_variant_builder_end (results_builder));
+        return TRUE;
+    }
+
+    sender = g_dbus_method_invocation_get_sender (invocation);
+    connection = g_dbus_method_invocation_get_connection (invocation);
+    request = request_new (sender, arg_app_id, arg_handle);
+
+    GtkWidget *dialog = gtk_file_chooser_dialog_new (arg_title ? arg_title : _("Select Folder to Save Files"),
+                                                     NULL,
+                                                     GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                                                     _("_Cancel"), GTK_RESPONSE_CANCEL,
+                                                     _("_Save"), GTK_RESPONSE_ACCEPT,
+                                                     NULL);
+
+    const gchar *current_folder_path = NULL;
+    if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
+        gtk_file_chooser_set_current_folder (GTK_FILE_CHOOSER (dialog), current_folder_path);
+    }
+
+    handle = g_new0 (FileChooserHandle, 1);
+    handle->impl = object;
+    handle->invocation = invocation;
+    handle->request = g_object_ref (request);
+    handle->action_type = FILE_CHOOSER_ACTION_SAVE_FILES;
+    handle->options = g_variant_ref (arg_options);
+    handle->dialog = dialog;
+
+    g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
+    g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
+
+    request_export (request, connection);
+
+    gtk_widget_show_all (dialog);
+    gtk_window_present (GTK_WINDOW (dialog));
+
     return TRUE;
 }
 
