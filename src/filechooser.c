@@ -23,15 +23,19 @@ typedef struct {
     FileChooserActionType action_type;
     GVariant *options;
     GtkWidget *dialog;
+    GCancellable *cancellable;
 } FileChooserHandle;
 
 static void on_dialog_response (GtkDialog *dialog, gint response_id, gpointer user_data);
 static gboolean handle_close (XdpImplRequest *object, GDBusMethodInvocation *invocation, gpointer user_data);
+static void on_dory_open_file_cb (GObject *source_object, GAsyncResult *res, gpointer user_data);
+static void on_dory_save_file_cb (GObject *source_object, GAsyncResult *res, gpointer user_data);
 
 static void
 file_chooser_handle_free (FileChooserHandle *handle)
 {
     g_clear_object (&handle->request);
+    g_clear_object (&handle->cancellable);
     if (handle->options)
         g_variant_unref (handle->options);
     g_free (handle);
@@ -51,6 +55,10 @@ handle_close (XdpImplRequest *object,
         handle->dialog = NULL;
     }
 
+    if (handle->cancellable) {
+        g_cancellable_cancel (handle->cancellable);
+    }
+
     g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
     
     if (handle->action_type == FILE_CHOOSER_ACTION_OPEN) {
@@ -61,8 +69,121 @@ handle_close (XdpImplRequest *object,
         xdp_impl_file_chooser_complete_save_files (handle->impl, handle->invocation, 1, g_variant_builder_end (results_builder));
     }
 
-    file_chooser_handle_free (handle);
+    if (handle->dialog == NULL) {
+        g_signal_handlers_disconnect_by_func (handle->request, G_CALLBACK (handle_close), handle);
+    } else {
+        file_chooser_handle_free (handle);
+    }
     return FALSE;
+}
+
+static void
+on_dory_open_file_cb (GObject *source_object,
+                      GAsyncResult *res,
+                      gpointer user_data)
+{
+    FileChooserHandle *handle = user_data;
+    g_autoptr(GVariant) reply = NULL;
+    g_autoptr(GError) error = NULL;
+    guint response = 2; // Default to error
+    g_autoptr(GVariantBuilder) results_builder = NULL;
+
+    reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source_object), res, &error);
+
+    if (error) {
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_debug ("on_dory_open_file_cb: call was cancelled");
+            file_chooser_handle_free (handle);
+            return;
+        }
+        g_warning ("Failed to call Dory OpenFile: %s", error->message);
+        response = 2;
+    } else {
+        g_auto(GStrv) uris = NULL;
+        g_variant_get (reply, "(^as)", &uris);
+
+        g_debug ("on_dory_open_file_cb: received %d URIs from Dory", uris ? (gint)g_strv_length (uris) : 0);
+
+        results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+        if (uris && g_strv_length (uris) > 0) {
+            response = 0; // Success
+            g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv ((const gchar * const *)uris, -1));
+        } else {
+            response = 1; // Cancelled
+        }
+    }
+
+    g_signal_handlers_disconnect_by_func (handle->request, G_CALLBACK (handle_close), handle);
+
+    if (handle->request->exported) {
+        request_unexport (handle->request);
+    }
+
+    if (results_builder == NULL) {
+        results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+    }
+
+    xdp_impl_file_chooser_complete_open_file (handle->impl,
+                                             handle->invocation,
+                                             response,
+                                             g_variant_builder_end (results_builder));
+
+    file_chooser_handle_free (handle);
+}
+
+static void
+on_dory_save_file_cb (GObject *source_object,
+                      GAsyncResult *res,
+                      gpointer user_data)
+{
+    FileChooserHandle *handle = user_data;
+    g_autoptr(GVariant) reply = NULL;
+    g_autoptr(GError) error = NULL;
+    guint response = 2; // Default to error
+    g_autoptr(GVariantBuilder) results_builder = NULL;
+
+    reply = g_dbus_connection_call_finish (G_DBUS_CONNECTION (source_object), res, &error);
+
+    if (error) {
+        if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+            g_debug ("on_dory_save_file_cb: call was cancelled");
+            file_chooser_handle_free (handle);
+            return;
+        }
+        g_warning ("Failed to call Dory SaveFile: %s", error->message);
+        response = 2;
+    } else {
+        const gchar *result_uri = NULL;
+        g_variant_get (reply, "(&s)", &result_uri);
+
+        g_debug ("on_dory_save_file_cb: result_uri='%s'", result_uri ? result_uri : "");
+
+        results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+        if (result_uri && *result_uri) {
+            response = 0; // Success
+            const gchar *uris[2] = { result_uri, NULL };
+            g_variant_builder_add (results_builder, "{sv}", "uris", g_variant_new_strv (uris, -1));
+        } else {
+            response = 1; // Cancelled
+        }
+    }
+
+    g_signal_handlers_disconnect_by_func (handle->request, G_CALLBACK (handle_close), handle);
+
+    if (handle->request->exported) {
+        request_unexport (handle->request);
+    }
+
+    if (results_builder == NULL) {
+        results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
+    }
+
+    xdp_impl_file_chooser_complete_save_file (handle->impl,
+                                             handle->invocation,
+                                             response,
+                                             g_variant_builder_end (results_builder));
+
+    file_chooser_handle_free (handle);
 }
 
 static void
@@ -194,6 +315,80 @@ handle_open_file (XdpImplFileChooser *object,
 
     g_debug ("handle_open_file: started");
 
+    sender = g_dbus_method_invocation_get_sender (invocation);
+    connection = g_dbus_method_invocation_get_connection (invocation);
+    request = request_new (sender, arg_app_id, arg_handle);
+
+    gchar *dory_path = g_find_program_in_path ("dory");
+    gboolean use_dory = (dory_path != NULL);
+    g_free (dory_path);
+
+    if (use_dory) {
+        g_debug ("handle_open_file: dory is available, routing via D-Bus");
+        
+        gboolean multiple = FALSE;
+        g_variant_lookup (arg_options, "multiple", "b", &multiple);
+        gboolean directory = FALSE;
+        g_variant_lookup (arg_options, "directory", "b", &directory);
+
+        g_autofree gchar *current_folder_uri = NULL;
+        const gchar *current_folder_path = NULL;
+        if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
+            g_autoptr(GFile) f = g_file_new_for_path (current_folder_path);
+            current_folder_uri = g_file_get_uri (f);
+        }
+
+        g_autoptr(GVariantBuilder) filters_builder = g_variant_builder_new (G_VARIANT_TYPE ("as"));
+        GVariantIter *filters_iter = NULL;
+        if (g_variant_lookup (arg_options, "filters", "a(sa(us))", &filters_iter)) {
+            GVariantIter *filter_iter;
+            const gchar *filter_name;
+            while (g_variant_iter_loop (filters_iter, "(&sa(us))", &filter_name, &filter_iter)) {
+                guint32 type;
+                const gchar *pattern;
+                while (g_variant_iter_loop (filter_iter, "(u&s)", &type, &pattern)) {
+                    if (type == 0) {
+                        g_variant_builder_add (filters_builder, "s", pattern);
+                    }
+                }
+            }
+            g_variant_iter_free (filters_iter);
+        }
+
+        handle = g_new0 (FileChooserHandle, 1);
+        handle->impl = object;
+        handle->invocation = invocation;
+        handle->request = g_object_ref (request);
+        handle->action_type = FILE_CHOOSER_ACTION_OPEN;
+        handle->options = g_variant_ref (arg_options);
+        handle->dialog = NULL;
+        handle->cancellable = g_cancellable_new ();
+
+        g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
+        request_export (request, connection);
+
+        g_dbus_connection_call (connection,
+                                "org.Dory.FileChooser",
+                                "/org/Dory/FileChooser",
+                                "org.Dory.FileChooser",
+                                "OpenFile",
+                                g_variant_new ("(sasbbs)",
+                                               arg_title ? arg_title : "",
+                                               filters_builder,
+                                               multiple,
+                                               directory,
+                                               current_folder_uri ? current_folder_uri : ""),
+                                G_VARIANT_TYPE ("(as)"),
+                                G_DBUS_CALL_FLAGS_NONE,
+                                -1,
+                                handle->cancellable,
+                                on_dory_open_file_cb,
+                                handle);
+        return TRUE;
+    }
+
+    g_debug ("handle_open_file: falling back to native GTK3 dialog");
+
     if (!gtk_init_check (NULL, NULL)) {
         g_warning ("GTK is not initialized or display is not available");
         g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
@@ -201,16 +396,10 @@ handle_open_file (XdpImplFileChooser *object,
         return TRUE;
     }
 
-    sender = g_dbus_method_invocation_get_sender (invocation);
-    connection = g_dbus_method_invocation_get_connection (invocation);
-    request = request_new (sender, arg_app_id, arg_handle);
-
     gboolean multiple = FALSE;
     g_variant_lookup (arg_options, "multiple", "b", &multiple);
     gboolean directory = FALSE;
     g_variant_lookup (arg_options, "directory", "b", &directory);
-
-    g_debug ("handle_open_file: multiple=%d, directory=%d", multiple, directory);
 
     GtkWidget *dialog = gtk_file_chooser_dialog_new (arg_title ? arg_title : (directory ? _("Select Folder") : _("Open File")),
                                                      NULL,
@@ -261,6 +450,7 @@ handle_open_file (XdpImplFileChooser *object,
     handle->action_type = FILE_CHOOSER_ACTION_OPEN;
     handle->options = g_variant_ref (arg_options);
     handle->dialog = dialog;
+    handle->cancellable = NULL;
 
     g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
     g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
@@ -289,16 +479,65 @@ handle_save_file (XdpImplFileChooser *object,
 
     g_debug ("handle_save_file: started");
 
+    sender = g_dbus_method_invocation_get_sender (invocation);
+    connection = g_dbus_method_invocation_get_connection (invocation);
+    request = request_new (sender, arg_app_id, arg_handle);
+
+    gchar *dory_path = g_find_program_in_path ("dory");
+    gboolean use_dory = (dory_path != NULL);
+    g_free (dory_path);
+
+    if (use_dory) {
+        g_debug ("handle_save_file: dory is available, routing via D-Bus");
+
+        g_autofree gchar *current_folder_uri = NULL;
+        const gchar *current_folder_path = NULL;
+        if (g_variant_lookup (arg_options, "current_folder", "^ay", &current_folder_path)) {
+            g_autoptr(GFile) f = g_file_new_for_path (current_folder_path);
+            current_folder_uri = g_file_get_uri (f);
+        }
+
+        const gchar *suggested_name = NULL;
+        g_variant_lookup (arg_options, "current_name", "&s", &suggested_name);
+
+        handle = g_new0 (FileChooserHandle, 1);
+        handle->impl = object;
+        handle->invocation = invocation;
+        handle->request = g_object_ref (request);
+        handle->action_type = FILE_CHOOSER_ACTION_SAVE;
+        handle->options = g_variant_ref (arg_options);
+        handle->dialog = NULL;
+        handle->cancellable = g_cancellable_new ();
+
+        g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
+        request_export (request, connection);
+
+        g_dbus_connection_call (connection,
+                                "org.Dory.FileChooser",
+                                "/org/Dory/FileChooser",
+                                "org.Dory.FileChooser",
+                                "SaveFile",
+                                g_variant_new ("(sss)",
+                                               arg_title ? arg_title : "",
+                                               current_folder_uri ? current_folder_uri : "",
+                                               suggested_name ? suggested_name : ""),
+                                G_VARIANT_TYPE ("(s)"),
+                                G_DBUS_CALL_FLAGS_NONE,
+                                -1,
+                                handle->cancellable,
+                                on_dory_save_file_cb,
+                                handle);
+        return TRUE;
+    }
+
+    g_debug ("handle_save_file: falling back to native GTK3 dialog");
+
     if (!gtk_init_check (NULL, NULL)) {
         g_warning ("GTK is not initialized or display is not available");
         g_autoptr(GVariantBuilder) results_builder = g_variant_builder_new (G_VARIANT_TYPE ("a{sv}"));
         xdp_impl_file_chooser_complete_save_file (object, invocation, 2, g_variant_builder_end (results_builder));
         return TRUE;
     }
-
-    sender = g_dbus_method_invocation_get_sender (invocation);
-    connection = g_dbus_method_invocation_get_connection (invocation);
-    request = request_new (sender, arg_app_id, arg_handle);
 
     GtkWidget *dialog = gtk_file_chooser_dialog_new (arg_title ? arg_title : _("Save File"),
                                                      NULL,
@@ -354,6 +593,7 @@ handle_save_file (XdpImplFileChooser *object,
     handle->action_type = FILE_CHOOSER_ACTION_SAVE;
     handle->options = g_variant_ref (arg_options);
     handle->dialog = dialog;
+    handle->cancellable = NULL;
 
     g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
     g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
@@ -412,6 +652,7 @@ handle_save_files (XdpImplFileChooser *object,
     handle->action_type = FILE_CHOOSER_ACTION_SAVE_FILES;
     handle->options = g_variant_ref (arg_options);
     handle->dialog = dialog;
+    handle->cancellable = NULL;
 
     g_signal_connect (dialog, "response", G_CALLBACK (on_dialog_response), handle);
     g_signal_connect (request, "handle-close", G_CALLBACK (handle_close), handle);
