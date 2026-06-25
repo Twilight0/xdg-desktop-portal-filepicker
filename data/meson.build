@@ -3,12 +3,12 @@ libexecdir_conf.set('libexecdir', prefix / libexecdir)
 
 # Portal
 install_data(
-  [ 'xapp.portal', 'xapp-gnome-keyring.portal' ],
+  [ 'filepicker.portal', 'filepicker-gnome-keyring.portal' ],
   install_dir: datadir / 'xdg-desktop-portal' / 'portals'
 )
 
 # dbus service
-service_name = 'org.freedesktop.impl.portal.desktop.xapp'
+service_name = 'org.freedesktop.impl.portal.desktop.filepicker'
 configure_file(
   input: service_name + '.service.in',
   output: service_name + '.service',
@@ -16,7 +16,7 @@ configure_file(
   install_dir: dbus_service_dir,
 )
 
-filename = 'xdg-desktop-portal-xapp'
+filename = 'xdg-desktop-portal-filepicker'
 # systemd unit
 configure_file(
   input: filename + '.service.in',

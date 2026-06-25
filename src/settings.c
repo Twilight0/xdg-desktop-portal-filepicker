@@ -61,7 +61,7 @@ static GVariant *get_accent_color (gpointer data);
 static GVariant *get_color_scheme (gpointer data);
 static GVariant *get_high_contrast (gpointer data);
 
-#define XAPP_PORTAL_INTERFACE_SCHEMA "org.x.apps.portal"
+#define FILEPICKER_PORTAL_INTERFACE_SCHEMA "org.x.apps.portal"
 #define CINNAMON_DESKTOP_INTERFACE_SCHEMA "org.cinnamon.desktop.interface"
 
 typedef GVariant* (* LookupFunc) (gpointer data);
@@ -84,9 +84,9 @@ typedef struct
 
 // ******** KEEP THE NAMESPACES GROUPED TOGETHER. See settings_handle_read_all () *******
 static const SettingDefinition setting_defs[] = {
-    { "org.freedesktop.appearance", "contrast",     XAPP_PORTAL_INTERFACE_SCHEMA,   "high-contrast",    get_high_contrast },
-    { "org.freedesktop.appearance", "color-scheme", XAPP_PORTAL_INTERFACE_SCHEMA,   "color-scheme",     get_color_scheme },
-    { "org.freedesktop.appearance", "accent-color", XAPP_PORTAL_INTERFACE_SCHEMA,   "accent-rgb",       get_accent_color }
+    { "org.freedesktop.appearance", "contrast",     FILEPICKER_PORTAL_INTERFACE_SCHEMA,   "high-contrast",    get_high_contrast },
+    { "org.freedesktop.appearance", "color-scheme", FILEPICKER_PORTAL_INTERFACE_SCHEMA,   "color-scheme",     get_color_scheme },
+    { "org.freedesktop.appearance", "accent-color", FILEPICKER_PORTAL_INTERFACE_SCHEMA,   "accent-rgb",       get_accent_color }
 };
 #define ACCENT_COLOR_DEF 2
 
