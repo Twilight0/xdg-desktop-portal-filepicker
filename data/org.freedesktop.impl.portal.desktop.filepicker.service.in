@@ -1,4 +1,4 @@
 [D-BUS Service]
 Name=org.freedesktop.impl.portal.desktop.filepicker
-Exec=@libexecdir@/xdg-desktop-portal-filepicker
-SystemdService=xdg-desktop-portal-filepicker.service
+Exec=@libexecdir@/xdg-desktop-portal-xapp-filepicker
+SystemdService=xdg-desktop-portal-xapp-filepicker.service

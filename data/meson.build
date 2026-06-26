@@ -16,7 +16,7 @@ configure_file(
   install_dir: dbus_service_dir,
 )
 
-filename = 'xdg-desktop-portal-filepicker'
+filename = 'xdg-desktop-portal-xapp-filepicker'
 # systemd unit
 configure_file(
   input: filename + '.service.in',

@@ -196,13 +196,13 @@ main (int argc, char *argv[])
   g_option_context_set_summary (context,
       "A backend implementation for xdg-desktop-portal.");
   g_option_context_set_description (context,
-      "xdg-desktop-portal-filepicker provides D-Bus interfaces that\n"
+      "xdg-desktop-portal-xapp-filepicker provides D-Bus interfaces that\n"
       "are used by xdg-desktop-portal to implement portals in Cinnamon, MATE or Xfce\n"
       "\n"
       "Documentation for the available D-Bus interfaces can be found at\n"
       "https://flatpak.github.io/xdg-desktop-portal/portal-docs.html\n"
       "\n"
-      "Please report issues at https://github.com/linuxmint/xdg-desktop-portal-filepicker/issues");
+      "Please report issues at https://github.com/Twilight0/xdg-desktop-portal-xapp-filepicker/issues");
   g_option_context_add_main_entries (context, entries, NULL);
   if (!g_option_context_parse (context, &argc, &argv, &error))
     {
@@ -262,7 +262,7 @@ main (int argc, char *argv[])
   if (opt_verbose)
     g_log_set_handler (G_LOG_DOMAIN, G_LOG_LEVEL_DEBUG, message_handler, NULL);
 
-  g_set_prgname ("xdg-desktop-portal-filepicker");
+  g_set_prgname ("xdg-desktop-portal-xapp-filepicker");
 
   loop = g_main_loop_new (NULL, FALSE);
 

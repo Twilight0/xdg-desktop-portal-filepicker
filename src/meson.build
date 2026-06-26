@@ -51,8 +51,8 @@ built_sources += gnome.gdbus_codegen(
 config_entries = {
     'GETTEXT_PACKAGE' : '"@0@"'.format(meson.project_name()),
     'LOCALEDIR': '"@0@"'.format(prefix / get_option('localedir')),
-    'PACKAGE_STRING': '"xdg-desktop-portal-filepicker @0@"'.format(meson.project_version()),
-    'G_LOG_DOMAIN': '"xdg-desktop-portal-filepicker"'
+    'PACKAGE_STRING': '"xdg-desktop-portal-xapp-filepicker @0@"'.format(meson.project_version()),
+    'G_LOG_DOMAIN': '"xdg-desktop-portal-xapp-filepicker"'
 
 }
 config = configuration_data(config_entries)
@@ -77,11 +77,11 @@ sources = built_sources + files(
   'settings.c',
   'utils.c',
   'wallpaper.c',
-  'xdg-desktop-portal-filepicker.c',
+  'xdg-desktop-portal-xapp-filepicker.c',
 )
 
 executable(
-  'xdg-desktop-portal-filepicker',
+  'xdg-desktop-portal-xapp-filepicker',
   sources,
   dependencies: deps,
   install: true,
