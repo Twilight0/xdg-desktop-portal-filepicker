@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: xdg-desktop-portal-gnome
-Source: https://download.gnome.org/sources/xdg-desktop-portal-gnome/
+Upstream-Name: xdg-desktop-portal-xapp-filepicker
+Source: https://github.com/Twilight0/xdg-desktop-portal-xapp-filepicker
 
 Files:
  *

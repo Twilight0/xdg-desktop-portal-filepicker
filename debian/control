@@ -1,4 +1,4 @@
-Source: xdg-desktop-portal-xapp
+Source: xdg-desktop-portal-xapp-filepicker
 Section: gnome
 Priority: optional
 Maintainer: Linux Mint <root@linuxmint.com>
@@ -10,9 +10,9 @@ Build-Depends:
  systemd-dev (>= 253-2~) | systemd (<< 253-2~),
  xdg-desktop-portal-dev (>= 1.7.1),
 Standards-Version: 4.6.0
-Homepage: https://github.com/linuxmint/xdg-desktop-portal-xapp
+Homepage: https://github.com/Twilight0/xdg-desktop-portal-xapp-filepicker
 
-Package: xdg-desktop-portal-xapp
+Package: xdg-desktop-portal-xapp-filepicker
 Architecture: linux-any
 Multi-Arch: foreign
 Depends:
@@ -29,12 +29,12 @@ Description: Xapp's Cinnamon, MATE and XFCE backends for xdg-desktop-portal.
  This allows sandboxed applications to request services and information from
  outside the sandbox in the MATE, XFCE and Cinnamon environments.
 
-Package: xdg-desktop-portal-xapp-dbg
+Package: xdg-desktop-portal-xapp-filepicker-dbg
 Section: debug
 Priority: extra
 Architecture: any
 Depends:
- xdg-desktop-portal-xapp (= ${binary:Version})
+ xdg-desktop-portal-xapp-filepicker (= ${binary:Version})
  ${misc:Depends},
 Description: Xapp's Cinnamon, MATE and XFCE backends for xdg-desktop-portal.
  This allows sandboxed applications to request services and information from

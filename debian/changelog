@@ -1,4 +1,4 @@
-xdg-desktop-portal-xapp (1.1.4) alfa; urgency=medium
+xdg-desktop-portal-xapp-filepicker (1.1.4) alfa; urgency=medium
 
   [ Michael Webster ]
   * .github/workflows: Add generate-test-packages trigger.
