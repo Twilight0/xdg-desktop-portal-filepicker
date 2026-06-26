@@ -2,7 +2,7 @@ debian/.debhelper
 debian/*.log
 debian/debhelper-build-stamp
 debian/tmp
-debian/xdg-desktop-portal-filepicker
-debian/xdg-desktop-portal-filepicker-dbg
+debian/xdg-desktop-portal-xapp-filepicker
+debian/xdg-desktop-portal-xapp-filepicker-dbg
 debian/*.substvars
 debian/files
