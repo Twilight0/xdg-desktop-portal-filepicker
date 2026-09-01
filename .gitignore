@@ -6,3 +6,5 @@ debian/xdg-desktop-portal-xapp-filepicker
 debian/xdg-desktop-portal-xapp-filepicker-dbg
 debian/*.substvars
 debian/files
+build/
+_build/

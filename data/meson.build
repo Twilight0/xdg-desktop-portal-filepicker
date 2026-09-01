@@ -7,6 +7,12 @@ install_data(
   install_dir: datadir / 'xdg-desktop-portal' / 'portals'
 )
 
+# Desktop portal configs
+install_data(
+  [ 'portals.conf', 'qtile-portals.conf', 'x-cinnamon-portals.conf' ],
+  install_dir: datadir / 'xdg-desktop-portal'
+)
+
 # dbus service
 service_name = 'org.freedesktop.impl.portal.desktop.filepicker'
 configure_file(

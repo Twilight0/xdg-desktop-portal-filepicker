@@ -1,3 +1,10 @@
+xdg-desktop-portal-xapp-filepicker (1.1.5) alfa; urgency=medium
+
+  [ Twilight0 ]
+  * Add qtile support to filepicker.portal and install default portal configuration files.
+
+ -- Twilight0 <twilight0@vivaldi.net>  Tue, 01 Sep 2026 23:00:00 +0300
+
 xdg-desktop-portal-xapp-filepicker (1.1.4) alfa; urgency=medium
 
   [ Michael Webster ]
