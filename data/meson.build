@@ -9,7 +9,7 @@ install_data(
 
 # Desktop portal configs
 install_data(
-  [ 'portals.conf', 'qtile-portals.conf', 'x-cinnamon-portals.conf' ],
+  [ 'portals.conf', 'qtile-portals.conf' ],
   install_dir: datadir / 'xdg-desktop-portal'
 )
 
