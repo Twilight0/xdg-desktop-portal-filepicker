@@ -64,10 +64,10 @@ gchar *desktop_arg;
 
 static gboolean have_gdk_backend = FALSE;
 
-const gchar *desktops[] = { "cinnamon", "mate", "xfce", NULL };
+const gchar *desktops[] = { "cinnamon", "mate", "xfce", "qtile", NULL };
 
 static GOptionEntry entries[] = {
-  { "desktop", 'd', 0, G_OPTION_ARG_STRING, &desktop_arg, "Specify desktop to represent (cinnamon | mate | xfce), if unspecified, XDG_CURRENT_DESKTOP is used", NULL },
+  { "desktop", 'd', 0, G_OPTION_ARG_STRING, &desktop_arg, "Specify desktop to represent (cinnamon | mate | xfce | qtile), if unspecified, XDG_CURRENT_DESKTOP is used", NULL },
   { "verbose", 'v', 0, G_OPTION_ARG_NONE, &opt_verbose, "Print debug information during command processing", NULL },
   { "replace", 'r', 0, G_OPTION_ARG_NONE, &opt_replace, "Replace a running instance", NULL },
   { "version", 0, 0, G_OPTION_ARG_NONE, &show_version, "Show program version.", NULL},
@@ -115,7 +115,14 @@ on_bus_acquired (GDBusConnection *connection,
       g_clear_error (&error);
     }
 
-  if (UNKNOWN_MODE)
+  // FileChooser (Dory) is universal and supported across all desktop environments
+  if (!filechooser_init (connection, &error))
+    {
+      g_warning ("error: %s\n", error->message);
+      g_clear_error (&error);
+    }
+
+  if (UNKNOWN_MODE || QTILE_MODE)
   {
     return;
   }
@@ -145,12 +152,6 @@ on_bus_acquired (GDBusConnection *connection,
     }
 
   if (!background_init (connection, &error))
-    {
-      g_warning ("error: %s\n", error->message);
-      g_clear_error (&error);
-    }
-
-  if (!filechooser_init (connection, &error))
     {
       g_warning ("error: %s\n", error->message);
       g_clear_error (&error);
@@ -233,7 +234,7 @@ main (int argc, char *argv[])
   {
     if (!g_strv_contains (desktops, desktop_arg))
     {
-        g_printerr ("Desktop argument must be cinnamon, mate or xfce\n");
+        g_printerr ("Desktop argument must be cinnamon, mate, xfce or qtile\n");
         return 1;
     }
 
@@ -249,10 +250,12 @@ main (int argc, char *argv[])
           mode = "mate";
       else if (g_strcmp0 (xdg_desktop, "XFCE") == 0)
           mode = "xfce";
+      else if (xdg_desktop && (g_ascii_strcasecmp (xdg_desktop, "qtile") == 0 || g_strrstr (xdg_desktop, "qtile") != NULL))
+          mode = "qtile";
       else
       {
           mode = "unknown";
-          g_printerr ("Current desktop (XDG_CURRENT_DESKTOP) is unsupported: %s\n", xdg_desktop);
+          g_debug ("Current desktop (XDG_CURRENT_DESKTOP) is: %s (filechooser portal enabled)", xdg_desktop ? xdg_desktop : "(null)");
       }
   }
 
